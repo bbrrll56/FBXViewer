@@ -1,0 +1,12 @@
+{
+    "msbuild": {
+    "UseLegacySdkResolver": true
+  },
+  "RoslynExtensionsOptions": {
+    "enableAnalyzersSupport": false,
+    "LocationPaths": []
+  },
+  "Unity": {
+    "Enable": true
+  }
+}

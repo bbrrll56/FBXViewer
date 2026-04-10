@@ -1,0 +1,24 @@
+{
+    "version": "1.0",
+    "projectName": "NewProject",
+    "createdAt": "2026-04-10 17:47:18",
+    "partCount": 2,
+    "audioCount": 3,
+    "parts": [
+        {
+            "name": "砲塔",
+            "descriptionCount": 1,
+            "audioFiles": [
+                "砲塔_0.wav"
+            ]
+        },
+        {
+            "name": "タイヤ",
+            "descriptionCount": 2,
+            "audioFiles": [
+                "タイヤ_0.wav",
+                "タイヤ_1.wav"
+            ]
+        }
+    ]
+}
