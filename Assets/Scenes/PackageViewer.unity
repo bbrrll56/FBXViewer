@@ -1826,7 +1826,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c4ad4b25dc01c3f47b1e18170287a368, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  packageFolderPath: Assets\Converer\Output\Package
+  packageFolderPath: 
   modelContainer: {fileID: 1913923844}
   projectNameText: {fileID: 1694339603}
   descriptionText: {fileID: 513434910}

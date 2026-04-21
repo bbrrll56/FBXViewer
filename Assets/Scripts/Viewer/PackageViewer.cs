@@ -61,6 +61,8 @@ namespace FBXViewer.Viewer
         private const float DimAlpha = 0.2f;
 
         private ProjectMetadataData projectMetadata;
+        private PackageManifest packageManifest;
+        private AssetBundle loadedModelBundle;
         private GameObject currentModelInstance;
         private int currentPartIndex;
         private int currentDescriptionIndex;
@@ -73,7 +75,7 @@ namespace FBXViewer.Viewer
 
             if (string.IsNullOrEmpty(packageFolderPath))
             {
-                packageFolderPath = Path.Combine(Application.dataPath, "Converer", "Output", "Package");
+                packageFolderPath = ResolveDefaultPackagePath();
             }
 
             Debug.Log($"[PackageViewer] Package path: {packageFolderPath}");
@@ -81,6 +83,84 @@ namespace FBXViewer.Viewer
 
             RegisterUiCallbacks();
             LoadPackage();
+        }
+
+        private static string ResolveDefaultPackagePath()
+        {
+            string packagesRoot = Path.Combine(Application.persistentDataPath, "Packages");
+            string packagePath = FindFirstPackagePath(packagesRoot);
+            if (!string.IsNullOrEmpty(packagePath))
+            {
+                return packagePath;
+            }
+
+            string streamingAssetsPackage = Path.Combine(Application.streamingAssetsPath, "Package");
+            if (IsPackagePath(streamingAssetsPackage))
+            {
+                return streamingAssetsPackage;
+            }
+
+            return packagesRoot;
+        }
+
+        private static string FindFirstPackagePath(string packagesRoot)
+        {
+            if (IsPackagePath(packagesRoot))
+            {
+                return packagesRoot;
+            }
+
+            if (!Directory.Exists(packagesRoot))
+            {
+                return string.Empty;
+            }
+
+            string[] packageDirectories = Directory.GetDirectories(packagesRoot);
+            for (int i = 0; i < packageDirectories.Length; i++)
+            {
+                if (IsPackagePath(packageDirectories[i]))
+                {
+                    return packageDirectories[i];
+                }
+            }
+
+            string nestedPackagePath = FindFirstNestedPackagePath(packagesRoot);
+            if (!string.IsNullOrEmpty(nestedPackagePath))
+            {
+                return nestedPackagePath;
+            }
+
+            return string.Empty;
+        }
+
+        private static string FindFirstNestedPackagePath(string root)
+        {
+            if (!Directory.Exists(root))
+            {
+                return string.Empty;
+            }
+
+            string[] directories = Directory.GetDirectories(root, "Package", SearchOption.AllDirectories);
+            for (int i = 0; i < directories.Length; i++)
+            {
+                if (IsPackagePath(directories[i]))
+                {
+                    return directories[i];
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static bool IsPackagePath(string path)
+        {
+            if (string.IsNullOrEmpty(path) || !Directory.Exists(path))
+            {
+                return false;
+            }
+
+            return File.Exists(Path.Combine(path, "manifest.json")) &&
+                   File.Exists(Path.Combine(path, "Metadata", "project_metadata.json"));
         }
 
         private void EnsureWavPlayer()
@@ -126,6 +206,12 @@ namespace FBXViewer.Viewer
 
         private void LoadPackage()
         {
+            packageManifest = PackageReader.ReadManifest(packageFolderPath);
+            if (packageManifest == null)
+            {
+                Debug.LogWarning("[PackageViewer] manifest.json was not loaded. Falling back to metadata-only loading.");
+            }
+
             projectMetadata = PackageReader.ReadProjectMetadata(packageFolderPath);
             if (projectMetadata == null)
             {
@@ -150,6 +236,11 @@ namespace FBXViewer.Viewer
         private void LoadModel()
         {
             if (projectMetadata == null || modelContainer == null)
+            {
+                return;
+            }
+
+            if (TryLoadAssetBundleModel())
             {
                 return;
             }
@@ -184,6 +275,132 @@ namespace FBXViewer.Viewer
             #else
             Debug.LogWarning("[PackageViewer] Runtime FBX loading is not implemented outside the editor.");
             #endif
+        }
+
+        private bool TryLoadAssetBundleModel()
+        {
+            if (packageManifest == null)
+            {
+                return false;
+            }
+
+            PackageBundle bundleEntry = SelectBundleForCurrentPlatform(packageManifest);
+            string bundleRelativePath = bundleEntry != null ? bundleEntry.bundle : packageManifest.modelBundle;
+            string assetName = bundleEntry != null ? bundleEntry.assetName : packageManifest.modelAssetName;
+
+            if (string.IsNullOrEmpty(bundleRelativePath))
+            {
+                Debug.LogWarning("[PackageViewer] No model bundle was listed in manifest.");
+                return false;
+            }
+
+            string bundlePath = Path.Combine(packageFolderPath, bundleRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(bundlePath))
+            {
+                Debug.LogWarning($"[PackageViewer] Model bundle was not found: {bundlePath}");
+                return false;
+            }
+
+            UnloadModelBundle();
+            loadedModelBundle = AssetBundle.LoadFromFile(bundlePath);
+            if (loadedModelBundle == null)
+            {
+                Debug.LogWarning($"[PackageViewer] Failed to load model AssetBundle: {bundlePath}");
+                return false;
+            }
+
+            GameObject modelAsset = LoadModelAssetFromBundle(loadedModelBundle, assetName);
+            if (modelAsset == null)
+            {
+                Debug.LogWarning($"[PackageViewer] Model asset was not found in bundle: {assetName}");
+                UnloadModelBundle();
+                return false;
+            }
+
+            if (currentModelInstance != null)
+            {
+                Destroy(currentModelInstance);
+            }
+
+            currentModelInstance = Instantiate(modelAsset, modelContainer);
+            currentModelInstance.name = "ModelInstance";
+            Debug.Log($"[PackageViewer] Model loaded from AssetBundle: {bundlePath}");
+            return true;
+        }
+
+        private static PackageBundle SelectBundleForCurrentPlatform(PackageManifest manifest)
+        {
+            if (manifest.bundles == null || manifest.bundles.Length == 0)
+            {
+                return null;
+            }
+
+            string preferredPlatform = GetPreferredBundlePlatform();
+            for (int i = 0; i < manifest.bundles.Length; i++)
+            {
+                PackageBundle bundle = manifest.bundles[i];
+                if (bundle != null && string.Equals(bundle.platform, preferredPlatform, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return bundle;
+                }
+            }
+
+            for (int i = 0; i < manifest.bundles.Length; i++)
+            {
+                PackageBundle bundle = manifest.bundles[i];
+                if (bundle != null && !string.IsNullOrEmpty(bundle.bundle))
+                {
+                    return bundle;
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetPreferredBundlePlatform()
+        {
+#if UNITY_ANDROID
+            return "Quest";
+#elif UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            return "Windows";
+#else
+            return "Quest";
+#endif
+        }
+
+        private static GameObject LoadModelAssetFromBundle(AssetBundle bundle, string assetName)
+        {
+            if (!string.IsNullOrEmpty(assetName))
+            {
+                GameObject explicitAsset = bundle.LoadAsset<GameObject>(assetName);
+                if (explicitAsset != null)
+                {
+                    return explicitAsset;
+                }
+            }
+
+            string[] assetNames = bundle.GetAllAssetNames();
+            for (int i = 0; i < assetNames.Length; i++)
+            {
+                GameObject asset = bundle.LoadAsset<GameObject>(assetNames[i]);
+                if (asset != null)
+                {
+                    return asset;
+                }
+            }
+
+            return null;
+        }
+
+        private void UnloadModelBundle()
+        {
+            if (loadedModelBundle == null)
+            {
+                return;
+            }
+
+            loadedModelBundle.Unload(false);
+            loadedModelBundle = null;
         }
 
         private void InitializePartDropdown()
@@ -827,6 +1044,8 @@ namespace FBXViewer.Viewer
             {
                 Destroy(currentModelInstance);
             }
+
+            UnloadModelBundle();
         }
 
         public void SetPackagePath(string path)

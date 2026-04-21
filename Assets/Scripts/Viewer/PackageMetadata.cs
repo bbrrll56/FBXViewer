@@ -32,7 +32,21 @@ namespace FBXViewer.Viewer
         public string createdAt;
         public int partCount;
         public int audioCount;
+        public string targetPlatform;
+        public string modelBundle;
+        public string modelAssetName;
+        public string metadata;
+        public string audioDirectory;
+        public PackageBundle[] bundles;
         public PackagePart[] parts;
+    }
+
+    [Serializable]
+    public class PackageBundle
+    {
+        public string platform;
+        public string bundle;
+        public string assetName;
     }
 
     [Serializable]

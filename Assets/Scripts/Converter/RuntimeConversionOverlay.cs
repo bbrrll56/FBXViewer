@@ -40,6 +40,7 @@ namespace FBXViewer.Converter
 
         private class FbxOption
         {
+            public string SourcePath;
             public string AssetPath;
             public string DisplayName;
         }
@@ -51,8 +52,13 @@ namespace FBXViewer.Converter
             Editor
         }
 
-        private const string DefaultInputFolder = "Assets/Converer/Input";
-        private const string DefaultExportFolderName = "Converer/Output";
+        private const string PersistentInputFolderName = "Input";
+        private const string PersistentPackageRootFolderName = "Packages";
+        private const string EditorImportCacheFolder = "Assets/Scripts/Converter/ImportedInput";
+        private const string LegacyInputFolder = "Assets/Conveter/Input";
+        private const string LegacyMisspelledInputFolder = "Assets/Converer/Input";
+        private const string LegacyExportFolder = "Assets/Conveter/Output";
+        private const string LegacyMisspelledExportFolder = "Assets/Converer/Output";
         private static readonly Color SelectionHighlightColor = new(1f, 0.85f, 0.2f, 1f);
         private static readonly Color SelectionEmissionColor = new(1f, 0.8f, 0.2f, 1f);
         private const float PreviewDimAlpha = 0.2f;
@@ -60,7 +66,7 @@ namespace FBXViewer.Converter
         [SerializeField] private RuntimeConversionStartView startView;
         [SerializeField] private RuntimeConversionFbxSelectionView fbxSelectionView;
         [SerializeField] private RuntimeConversionPartEditorView partEditorView;
-        [SerializeField] private string inputFolder = DefaultInputFolder;
+        [SerializeField] private string inputFolder = string.Empty;
         [SerializeField] private string exportRootPath = string.Empty;
         [SerializeField] private Camera previewCamera;
         [SerializeField] private bool autoFramePreviewCamera = true;
@@ -113,10 +119,7 @@ namespace FBXViewer.Converter
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(exportRootPath))
-            {
-                exportRootPath = Path.Combine(Application.dataPath, DefaultExportFolderName);
-            }
+            NormalizeStoragePaths();
 
             converter = GetComponent<FBXConverter>() ?? gameObject.AddComponent<FBXConverter>();
             audioPipeline = GetComponent<AudioGenerationPipeline>() ?? gameObject.AddComponent<AudioGenerationPipeline>();
@@ -165,9 +168,13 @@ namespace FBXViewer.Converter
         {
             availableFbxOptions.Clear();
             selectedFbxIndex = -1;
+            NormalizeStoragePaths();
 
 #if UNITY_EDITOR
-            if (string.IsNullOrWhiteSpace(inputFolder) || !AssetDatabase.IsValidFolder(inputFolder))
+            Directory.CreateDirectory(inputFolder);
+            Directory.CreateDirectory(exportRootPath);
+
+            if (!Directory.Exists(inputFolder))
             {
                 SetBrowserStatus($"FBX input folder not found: {inputFolder}");
                 RenderFbxList();
@@ -175,24 +182,32 @@ namespace FBXViewer.Converter
                 return;
             }
 
-            string[] guids = AssetDatabase.FindAssets("t:GameObject", new[] { inputFolder });
-            foreach (string guid in guids)
+            string[] fbxPaths = Directory.GetFiles(inputFolder, "*.fbx", SearchOption.TopDirectoryOnly);
+            if (fbxPaths.Length > 0)
             {
-                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
-                if (!assetPath.EndsWith(".fbx", System.StringComparison.OrdinalIgnoreCase))
+                EnsureEditorImportCacheFolder();
+            }
+
+            foreach (string sourcePath in fbxPaths)
+            {
+                string assetPath = ImportExternalFbxToAssetCache(sourcePath);
+                if (string.IsNullOrEmpty(assetPath))
                 {
                     continue;
                 }
 
                 availableFbxOptions.Add(new FbxOption
                 {
+                    SourcePath = sourcePath,
                     AssetPath = assetPath,
-                    DisplayName = Path.GetFileNameWithoutExtension(assetPath)
+                    DisplayName = Path.GetFileNameWithoutExtension(sourcePath)
                 });
             }
 
             availableFbxOptions.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, System.StringComparison.OrdinalIgnoreCase));
-            SetBrowserStatus(availableFbxOptions.Count > 0 ? $"{availableFbxOptions.Count} FBX file(s) found." : "No FBX files were found.");
+            SetBrowserStatus(availableFbxOptions.Count > 0
+                ? $"{availableFbxOptions.Count} FBX file(s) found. Input: {inputFolder}"
+                : $"No FBX files were found. Input: {inputFolder}");
 #else
             SetBrowserStatus("FBX scanning is only available in the Unity Editor.");
 #endif
@@ -220,7 +235,7 @@ namespace FBXViewer.Converter
             }
 
             selectedFbxIndex = index;
-            SetBrowserStatus($"Selected: {availableFbxOptions[index].AssetPath}");
+            SetBrowserStatus($"Selected: {availableFbxOptions[index].SourcePath}");
             fbxSelectionView.SetSelectedIndex(selectedFbxIndex);
 
             UpdateUiState();
@@ -375,7 +390,7 @@ namespace FBXViewer.Converter
             }
 
             string title = GetPartTitle();
-            string description = GetDescription();
+            string[] descriptions = GetDescriptions();
             string[] selectedObjectNames = GetSelectedDetectedObjectNames();
 
             if (string.IsNullOrWhiteSpace(title))
@@ -384,9 +399,15 @@ namespace FBXViewer.Converter
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(description))
+            if (descriptions.Length == 0)
             {
-                SetEditorStatus("Enter a description.");
+                SetEditorStatus("Enter at least one description.");
+                return;
+            }
+
+            if (!partEditorView.AreDescriptionInputsValid())
+            {
+                SetEditorStatus("Fill or remove empty description fields.");
                 return;
             }
 
@@ -396,7 +417,7 @@ namespace FBXViewer.Converter
                 return;
             }
 
-            converter.AddPartInfo(title, new[] { description }, selectedObjectNames);
+            converter.AddPartInfo(title, descriptions, selectedObjectNames);
             currentProject = converter.GetCurrentProject();
             RenderSavedPartSummaries();
             SetEditorStatus($"Saved part: {title}");
@@ -447,7 +468,7 @@ namespace FBXViewer.Converter
             bool hasDetectedMeshes = detectedParts.Count > 0;
             bool hasDraftSelection = GetSelectedDetectedObjectNames().Length > 0;
             bool hasSavedParts = currentProject != null && currentProject.parts.Count > 0;
-            bool hasDraftText = !string.IsNullOrWhiteSpace(GetPartTitle()) || !string.IsNullOrWhiteSpace(GetDescription());
+            bool hasDraftText = !string.IsNullOrWhiteSpace(GetPartTitle()) || partEditorView.HasAnyDescriptionText();
 
             startView.SetInteractable(!isConverting);
             fbxSelectionView.SetInteractable(isConverting, hasSelection);
@@ -458,6 +479,81 @@ namespace FBXViewer.Converter
         {
             return Path.Combine(exportRootPath, SanitizePathSegment(projectName));
         }
+
+        private void NormalizeStoragePaths()
+        {
+            if (string.IsNullOrWhiteSpace(inputFolder) || IsLegacyInputPath(inputFolder))
+            {
+                inputFolder = Path.Combine(Application.persistentDataPath, PersistentInputFolderName);
+            }
+
+            if (string.IsNullOrWhiteSpace(exportRootPath) || IsLegacyExportPath(exportRootPath))
+            {
+                exportRootPath = Path.Combine(Application.persistentDataPath, PersistentPackageRootFolderName);
+            }
+        }
+
+        private static bool IsLegacyInputPath(string path)
+        {
+            string normalizedPath = NormalizePath(path);
+            return normalizedPath.EndsWith(LegacyInputFolder, System.StringComparison.OrdinalIgnoreCase) ||
+                   normalizedPath.EndsWith(LegacyMisspelledInputFolder, System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsLegacyExportPath(string path)
+        {
+            string normalizedPath = NormalizePath(path);
+            if (normalizedPath.EndsWith(LegacyExportFolder, System.StringComparison.OrdinalIgnoreCase) ||
+                normalizedPath.EndsWith(LegacyMisspelledExportFolder, System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            return normalizedPath.EndsWith("Assets/Conveter/Output", System.StringComparison.OrdinalIgnoreCase) ||
+                   normalizedPath.EndsWith("Assets/Converer/Output", System.StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizePath(string path)
+        {
+            return string.IsNullOrEmpty(path) ? string.Empty : path.Replace('\\', '/').TrimEnd('/');
+        }
+
+#if UNITY_EDITOR
+        private static void EnsureEditorImportCacheFolder()
+        {
+            string[] folders = EditorImportCacheFolder.Split('/');
+            string current = folders[0];
+
+            for (int i = 1; i < folders.Length; i++)
+            {
+                string next = $"{current}/{folders[i]}";
+                if (!AssetDatabase.IsValidFolder(next))
+                {
+                    AssetDatabase.CreateFolder(current, folders[i]);
+                }
+
+                current = next;
+            }
+        }
+
+        private static string ImportExternalFbxToAssetCache(string sourcePath)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+            {
+                return string.Empty;
+            }
+
+            string cachedFileName = Path.GetFileName(sourcePath);
+            string assetPath = $"{EditorImportCacheFolder}/{cachedFileName}".Replace('\\', '/');
+            string absoluteAssetPath = Path.Combine(Directory.GetCurrentDirectory(), assetPath.Replace('/', Path.DirectorySeparatorChar));
+
+            Directory.CreateDirectory(Path.GetDirectoryName(absoluteAssetPath));
+            File.Copy(sourcePath, absoluteAssetPath, true);
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+
+            return assetPath;
+        }
+#endif
 
         private string SanitizePathSegment(string value)
         {
@@ -484,9 +580,9 @@ namespace FBXViewer.Converter
             partEditorView.SetPartTitle(value);
         }
 
-        private string GetDescription()
+        private string[] GetDescriptions()
         {
-            return partEditorView.GetDescription();
+            return partEditorView.GetDescriptions();
         }
 
         private string[] GetSelectedDetectedObjectNames()

@@ -85,14 +85,18 @@
 **オプション A: 自動検出（推奨）**
 - PackageViewer スクリプトは以下をチェックします:
   ```
-  Converer/Output/Package フォルダ
-  (Assets フォルダの親の Converer フォルダを参照)
+  Application.persistentDataPath/Packages
+  StreamingAssets/Package
+  ```
+- 現在のRuntime変換UIは、実運用パスとして以下へ出力します:
+  ```
+  Application.persistentDataPath/Packages/{ProjectName}/Package
   ```
 
 **オプション B: 手動設定**
 - PackageViewer の `packageFolderPath` に直接パスを入力:
   ```
-  C:\Users\Ryo\Documents\Projects\FBXViewer\FBXViewer\Assets\Converer\Output\Package
+  {Application.persistentDataPath}\Packages\{ProjectName}\Package
   ```
 
 ## 使用方法
@@ -124,11 +128,12 @@
 
 ## 今後の実装予定
 
-⏳ **モデル表示機能**
-- FBX をプロジェクト外から読み込む方法の調査
-- AssetBundle の使用検討
+✅ **モデル表示機能**
+- manifest.json のAssetBundle情報を参照
+- PC Viewerでは `model_windows.bundle` を優先ロード
+- Quest/Androidでは `model_android.bundle` をロードする想定
 
-⏳ **ハイライト機能**
+✅ **ハイライト機能**
 - 説明中のパーツを視覚的にハイライト
 
 ⏳ **UI 改善**
@@ -143,7 +148,7 @@
 3. `project_metadata.json` が存在するか確認
 
 ### 音声が再生されない
-1. `Assets/Converer/Output/Package/Audio/` にファイルが存在するか確認
+1. `Application.persistentDataPath/Packages/{ProjectName}/Package/Audio/` にファイルが存在するか確認
 2. ファイル名の文字化け（Shift-JIS）を確認
 3. `WAVPlayer` の `PlayWAV()` メッセージを確認
 
