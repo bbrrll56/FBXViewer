@@ -1,5 +1,8 @@
 using UnityEngine;
+
+#if UNITY_EDITOR
 using UnityEditor;
+#endif
 
 namespace FBXViewer.Converter
 {
@@ -13,6 +16,7 @@ namespace FBXViewer.Converter
         /// </summary>
         public static GameObject ImportFBX(string fbxPath)
         {
+#if UNITY_EDITOR
             if (string.IsNullOrEmpty(fbxPath))
             {
                 Debug.LogError("FBXファイルパスが空です");
@@ -61,6 +65,10 @@ namespace FBXViewer.Converter
 
             Debug.Log($"✓ FBXを読み込みました: {assetPath}");
             return instance;
+#else
+            Debug.LogWarning("FBX import preview is only available in the Unity Editor.");
+            return null;
+#endif
         }
 
         /// <summary>
@@ -80,6 +88,7 @@ namespace FBXViewer.Converter
         /// </summary>
         public static void OptimizeFBXImport(string fbxPath)
         {
+#if UNITY_EDITOR
             string assetPath = FileUtil.GetProjectRelativePath(fbxPath);
             if (!assetPath.StartsWith("Assets/"))
             {
@@ -93,6 +102,9 @@ namespace FBXViewer.Converter
                 importer.SaveAndReimport();
                 Debug.Log("FBXインポート設定を最適化しました");
             }
+#else
+            Debug.LogWarning("FBX import optimization is only available in the Unity Editor.");
+#endif
         }
     }
 }

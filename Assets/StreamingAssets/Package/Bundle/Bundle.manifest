@@ -1,0 +1,7 @@
+ManifestFileVersion: 0
+CRC: 2593039665
+AssetBundleManifest:
+  AssetBundleInfos:
+    Info_0:
+      Name: model_android.bundle
+      Dependencies: {}

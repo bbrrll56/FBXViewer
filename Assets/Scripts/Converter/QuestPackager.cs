@@ -65,6 +65,13 @@ namespace FBXViewer.Converter
                 Debug.Log("[QuestPackager] === Package generation started ===");
                 Debug.Log($"[QuestPackager] Output path: {packageOutputPath}");
 
+#if UNITY_EDITOR
+                if (EditorApplication.isPlaying)
+                {
+                    throw new InvalidOperationException("Building AssetBundles while in play mode is not allowed. Queue the package build and exit play mode first.");
+                }
+#endif
+
                 CopyAudioFiles(projectData, structure);
                 CopyModelFile(projectData, structure);
 
@@ -142,15 +149,7 @@ namespace FBXViewer.Converter
                 Debug.LogWarning($"[QuestPackager] Android AssetBundle failed: {androidResult.ErrorMessage}");
             }
 
-            BundleBuildResult windowsResult = BuildModelBundle(projectData, structure, "Windows", WindowsBundleFileName, BuildTarget.StandaloneWindows64);
-            if (windowsResult.Success)
-            {
-                results.Add(windowsResult);
-            }
-            else
-            {
-                Debug.LogWarning($"[QuestPackager] Windows AssetBundle failed: {windowsResult.ErrorMessage}");
-            }
+            // Quest packages only require the Android AssetBundle.
 #else
             Debug.LogWarning("[QuestPackager] AssetBundle generation requires the Unity Editor.");
 #endif
@@ -181,6 +180,8 @@ namespace FBXViewer.Converter
                 return result;
             }
 
+            NormalizeModelMaterialsForRenderPipeline(modelAsset);
+
             var buildMap = new[]
             {
                 new AssetBundleBuild
@@ -210,6 +211,133 @@ namespace FBXViewer.Converter
             Debug.Log($"[QuestPackager] Generated {platform} AssetBundle: {bundlePath}");
             Debug.Log($"[QuestPackager] Bundle asset name: {result.AssetName}");
             return result;
+        }
+
+        private static void NormalizeModelMaterialsForRenderPipeline(GameObject modelAsset)
+        {
+            Shader fallbackShader = FindRenderableShader();
+            if (fallbackShader == null)
+            {
+                Debug.LogWarning("[QuestPackager] No renderable fallback shader was found. Model materials were not changed.");
+                return;
+            }
+
+            Renderer[] renderers = modelAsset.GetComponentsInChildren<Renderer>(true);
+            int changedCount = 0;
+            for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                Material[] materials = renderers[rendererIndex].sharedMaterials;
+                for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+                {
+                    Material material = materials[materialIndex];
+                    if (material == null || IsRenderableMaterial(material))
+                    {
+                        continue;
+                    }
+
+                    Color color = ReadMaterialColor(material);
+                    Texture mainTexture = ReadMainTexture(material);
+                    material.shader = fallbackShader;
+                    WriteMaterialColor(material, color);
+                    WriteMainTexture(material, mainTexture);
+                    EditorUtility.SetDirty(material);
+                    changedCount++;
+                }
+            }
+
+            if (changedCount > 0)
+            {
+                AssetDatabase.SaveAssets();
+                Debug.Log($"[QuestPackager] Normalized {changedCount} material(s) for AssetBundle shader compatibility: {fallbackShader.name}");
+            }
+        }
+
+        private static Shader FindRenderableShader()
+        {
+            return Shader.Find("Universal Render Pipeline/Lit")
+                ?? Shader.Find("Universal Render Pipeline/Simple Lit")
+                ?? Shader.Find("Standard")
+                ?? Shader.Find("Unlit/Texture")
+                ?? Shader.Find("Sprites/Default");
+        }
+
+        private static bool IsRenderableMaterial(Material material)
+        {
+            if (material.shader == null
+                || !material.shader.isSupported
+                || string.Equals(material.shader.name, "Hidden/InternalErrorShader", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline == null)
+            {
+                return true;
+            }
+
+            return material.shader.name.StartsWith("Universal Render Pipeline/", StringComparison.Ordinal)
+                || material.shader.name.StartsWith("Shader Graphs/", StringComparison.Ordinal);
+        }
+
+        private static Color ReadMaterialColor(Material material)
+        {
+            if (material.HasProperty("_BaseColor"))
+            {
+                return material.GetColor("_BaseColor");
+            }
+
+            if (material.HasProperty("_Color"))
+            {
+                return material.GetColor("_Color");
+            }
+
+            return Color.white;
+        }
+
+        private static void WriteMaterialColor(Material material, Color color)
+        {
+            if (material.HasProperty("_BaseColor"))
+            {
+                material.SetColor("_BaseColor", color);
+            }
+
+            if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", color);
+            }
+        }
+
+        private static Texture ReadMainTexture(Material material)
+        {
+            if (material.HasProperty("_BaseMap"))
+            {
+                return material.GetTexture("_BaseMap");
+            }
+
+            if (material.HasProperty("_MainTex"))
+            {
+                return material.GetTexture("_MainTex");
+            }
+
+            return null;
+        }
+
+        private static void WriteMainTexture(Material material, Texture texture)
+        {
+            if (texture == null)
+            {
+                return;
+            }
+
+            if (material.HasProperty("_BaseMap"))
+            {
+                material.SetTexture("_BaseMap", texture);
+            }
+
+            if (material.HasProperty("_MainTex"))
+            {
+                material.SetTexture("_MainTex", texture);
+            }
         }
 #endif
 

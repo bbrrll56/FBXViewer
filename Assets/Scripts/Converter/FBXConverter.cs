@@ -3,6 +3,10 @@ using System.IO;
 using FBXViewer.Data;
 using UnityEngine;
 
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
+
 namespace FBXViewer.Converter
 {
     /// <summary>
@@ -14,6 +18,7 @@ namespace FBXViewer.Converter
         private ProjectData currentProject;
         private AudioGenerationPipeline audioGenerator;
         private string conversionOutputFolder;
+        private bool packageBuildDeferred;
 
         // 変換完了イベント
         public delegate void OnConversionComplete(bool success, string message);
@@ -134,6 +139,8 @@ namespace FBXViewer.Converter
         /// </summary>
         public IEnumerator Convert()
         {
+            packageBuildDeferred = false;
+
             if (!ValidateProject())
             {
                 Debug.LogError("[FBXConverter] プロジェクトが無効です。変換を中止します。");
@@ -153,6 +160,13 @@ namespace FBXViewer.Converter
 
             // Step 3: パッケージ生成
             yield return StartCoroutine(GeneratePackage());
+
+            if (packageBuildDeferred)
+            {
+                Debug.Log("[FBXConverter] AssetBundle packaging was queued and will run after exiting play mode.");
+                ConversionComplete?.Invoke(true, "Audio and metadata generation completed. AssetBundle packaging will finish after play mode exits.");
+                yield break;
+            }
 
             Debug.Log($"[FBXConverter] === 変換完了 ===");
 
@@ -222,6 +236,15 @@ namespace FBXViewer.Converter
                 string packageOutputPath = Path.Combine(currentProject.exportPath, "Package");
 
                 Debug.Log($"[FBXConverter] パッケージ生成開始: {packageOutputPath}");
+
+#if UNITY_EDITOR
+                if (EditorApplication.isPlaying)
+                {
+                    packageBuildDeferred = true;
+                    QuestPackageBuildScheduler.Schedule(currentProject, packageOutputPath);
+                    yield break;
+                }
+#endif
 
                 bool success = QuestPackager.GeneratePackage(currentProject, packageOutputPath);
 

@@ -1,0 +1,36 @@
+{
+    "version": "2.0",
+    "projectName": "MCV",
+    "createdAt": "2026-04-22 18:52:13",
+    "partCount": 2,
+    "audioCount": 3,
+    "targetPlatform": "Quest",
+    "modelBundle": "Bundle/model_android.bundle",
+    "modelAssetName": "assets/scripts/converter/importedinput/mcv.fbx",
+    "metadata": "Metadata/project_metadata.json",
+    "audioDirectory": "Audio",
+    "bundles": [
+        {
+            "platform": "Quest",
+            "bundle": "Bundle/model_android.bundle",
+            "assetName": "assets/scripts/converter/importedinput/mcv.fbx"
+        }
+    ],
+    "parts": [
+        {
+            "name": "主砲",
+            "descriptionCount": 1,
+            "audioFiles": [
+                "主砲_0.wav"
+            ]
+        },
+        {
+            "name": "タイヤ",
+            "descriptionCount": 2,
+            "audioFiles": [
+                "タイヤ_0.wav",
+                "タイヤ_1.wav"
+            ]
+        }
+    ]
+}

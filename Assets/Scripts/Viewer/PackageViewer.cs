@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 
 namespace FBXViewer.Viewer
@@ -69,13 +70,13 @@ namespace FBXViewer.Viewer
         private Coroutine highlightCoroutine;
         private Coroutine audioSequenceCoroutine;
 
-        private void Start()
+        private IEnumerator Start()
         {
             EnsureWavPlayer();
 
             if (string.IsNullOrEmpty(packageFolderPath))
             {
-                packageFolderPath = ResolveDefaultPackagePath();
+                yield return PrepareDefaultPackagePath();
             }
 
             Debug.Log($"[PackageViewer] Package path: {packageFolderPath}");
@@ -83,6 +84,29 @@ namespace FBXViewer.Viewer
 
             RegisterUiCallbacks();
             LoadPackage();
+        }
+
+        private IEnumerator PrepareDefaultPackagePath()
+        {
+            string packagesRoot = Path.Combine(Application.persistentDataPath, "Packages");
+            string persistentPackagePath = FindFirstPackagePath(packagesRoot);
+            if (!string.IsNullOrEmpty(persistentPackagePath))
+            {
+                packageFolderPath = persistentPackagePath;
+                yield break;
+            }
+
+            string persistentEmbeddedPackagePath = Path.Combine(Application.persistentDataPath, "Package");
+            if (IsPackagePath(persistentEmbeddedPackagePath))
+            {
+                packageFolderPath = persistentEmbeddedPackagePath;
+                yield break;
+            }
+
+            yield return ExtractStreamingAssetsPackage(persistentEmbeddedPackagePath);
+            packageFolderPath = IsPackagePath(persistentEmbeddedPackagePath)
+                ? persistentEmbeddedPackagePath
+                : ResolveDefaultPackagePath();
         }
 
         private static string ResolveDefaultPackagePath()
@@ -95,12 +119,146 @@ namespace FBXViewer.Viewer
             }
 
             string streamingAssetsPackage = Path.Combine(Application.streamingAssetsPath, "Package");
-            if (IsPackagePath(streamingAssetsPackage))
+            if (!IsWebRequestPath(streamingAssetsPackage) && IsPackagePath(streamingAssetsPackage))
             {
                 return streamingAssetsPackage;
             }
 
             return packagesRoot;
+        }
+
+        private static bool IsWebRequestPath(string path)
+        {
+            return !string.IsNullOrEmpty(path) &&
+                   (path.Contains("://") || path.Contains(":///"));
+        }
+
+        private IEnumerator ExtractStreamingAssetsPackage(string destinationPackagePath)
+        {
+            string streamingPackagePath = Path.Combine(Application.streamingAssetsPath, "Package");
+            string manifestPath = CombinePackagePath(streamingPackagePath, "manifest.json");
+            string manifestJson = string.Empty;
+
+            yield return ReadTextFile(manifestPath, value => manifestJson = value);
+            if (string.IsNullOrEmpty(manifestJson))
+            {
+                yield break;
+            }
+
+            PackageManifest embeddedManifest = JsonUtility.FromJson<PackageManifest>(manifestJson);
+            if (embeddedManifest == null)
+            {
+                Debug.LogWarning("[PackageViewer] Embedded package manifest was invalid.");
+                yield break;
+            }
+
+            Directory.CreateDirectory(destinationPackagePath);
+            Directory.CreateDirectory(Path.Combine(destinationPackagePath, "Metadata"));
+            Directory.CreateDirectory(Path.Combine(destinationPackagePath, "Bundle"));
+            Directory.CreateDirectory(Path.Combine(destinationPackagePath, "Audio"));
+
+            File.WriteAllText(Path.Combine(destinationPackagePath, "manifest.json"), manifestJson);
+
+            yield return CopyPackageFile(streamingPackagePath, destinationPackagePath, embeddedManifest.metadata);
+
+            if (!string.IsNullOrEmpty(embeddedManifest.modelBundle))
+            {
+                yield return CopyPackageFile(streamingPackagePath, destinationPackagePath, embeddedManifest.modelBundle);
+            }
+
+            if (embeddedManifest.bundles != null)
+            {
+                for (int i = 0; i < embeddedManifest.bundles.Length; i++)
+                {
+                    if (embeddedManifest.bundles[i] != null && !string.IsNullOrEmpty(embeddedManifest.bundles[i].bundle))
+                    {
+                        yield return CopyPackageFile(streamingPackagePath, destinationPackagePath, embeddedManifest.bundles[i].bundle);
+                    }
+                }
+            }
+
+            if (embeddedManifest.parts != null)
+            {
+                for (int i = 0; i < embeddedManifest.parts.Length; i++)
+                {
+                    PackagePart part = embeddedManifest.parts[i];
+                    if (part?.audioFiles == null)
+                    {
+                        continue;
+                    }
+
+                    for (int j = 0; j < part.audioFiles.Length; j++)
+                    {
+                        string audioFileName = new FileInfo(part.audioFiles[j]).Name;
+                        yield return CopyPackageFile(streamingPackagePath, destinationPackagePath, Path.Combine("Audio", audioFileName));
+                    }
+                }
+            }
+
+            Debug.Log($"[PackageViewer] Embedded package extracted: {destinationPackagePath}");
+        }
+
+        private static IEnumerator ReadTextFile(string sourcePath, System.Action<string> onLoaded)
+        {
+            if (IsWebRequestPath(sourcePath))
+            {
+                using UnityWebRequest request = UnityWebRequest.Get(sourcePath);
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"[PackageViewer] Failed to read package file: {sourcePath} ({request.error})");
+                    onLoaded?.Invoke(string.Empty);
+                    yield break;
+                }
+
+                onLoaded?.Invoke(request.downloadHandler.text);
+                yield break;
+            }
+
+            onLoaded?.Invoke(File.Exists(sourcePath) ? File.ReadAllText(sourcePath) : string.Empty);
+        }
+
+        private static IEnumerator CopyPackageFile(string sourcePackagePath, string destinationPackagePath, string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath))
+            {
+                yield break;
+            }
+
+            string normalizedRelativePath = relativePath.Replace('\\', '/');
+            string sourcePath = CombinePackagePath(sourcePackagePath, normalizedRelativePath);
+            string destinationPath = Path.Combine(destinationPackagePath, normalizedRelativePath.Replace('/', Path.DirectorySeparatorChar));
+            Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+
+            if (IsWebRequestPath(sourcePath))
+            {
+                using UnityWebRequest request = UnityWebRequest.Get(sourcePath);
+                yield return request.SendWebRequest();
+
+                if (request.result != UnityWebRequest.Result.Success)
+                {
+                    Debug.LogWarning($"[PackageViewer] Failed to copy package file: {sourcePath} ({request.error})");
+                    yield break;
+                }
+
+                File.WriteAllBytes(destinationPath, request.downloadHandler.data);
+                yield break;
+            }
+
+            if (File.Exists(sourcePath))
+            {
+                File.Copy(sourcePath, destinationPath, true);
+            }
+        }
+
+        private static string CombinePackagePath(string basePath, string relativePath)
+        {
+            string normalizedBasePath = basePath.Replace('\\', '/').TrimEnd('/');
+            string normalizedRelativePath = relativePath.Replace('\\', '/').TrimStart('/');
+            return IsWebRequestPath(normalizedBasePath)
+                ? $"{normalizedBasePath}/{normalizedRelativePath}"
+                : Path.Combine(basePath, relativePath);
         }
 
         private static string FindFirstPackagePath(string packagesRoot)
@@ -271,6 +429,7 @@ namespace FBXViewer.Viewer
 
             currentModelInstance = Instantiate(fbxModel, modelContainer);
             currentModelInstance.name = "ModelInstance";
+            RepairModelMaterials(currentModelInstance);
             Debug.Log($"[PackageViewer] Model loaded: {fbxPath}");
             #else
             Debug.LogWarning("[PackageViewer] Runtime FBX loading is not implemented outside the editor.");
@@ -279,6 +438,11 @@ namespace FBXViewer.Viewer
 
         private bool TryLoadAssetBundleModel()
         {
+#if UNITY_EDITOR
+            // The package contains an Android/Quest bundle. In the Editor, load the imported FBX instead so
+            // platform-specific shader data does not show as pink during preview.
+            return false;
+#else
             if (packageManifest == null)
             {
                 return false;
@@ -324,8 +488,140 @@ namespace FBXViewer.Viewer
 
             currentModelInstance = Instantiate(modelAsset, modelContainer);
             currentModelInstance.name = "ModelInstance";
+            RepairModelMaterials(currentModelInstance);
             Debug.Log($"[PackageViewer] Model loaded from AssetBundle: {bundlePath}");
             return true;
+#endif
+        }
+
+        private static void RepairModelMaterials(GameObject model)
+        {
+            if (model == null)
+            {
+                return;
+            }
+
+            Shader fallbackShader = FindRenderableShader();
+            if (fallbackShader == null)
+            {
+                Debug.LogWarning("[PackageViewer] No renderable fallback shader was found.");
+                return;
+            }
+
+            Renderer[] renderers = model.GetComponentsInChildren<Renderer>(true);
+            int repairedCount = 0;
+            for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+            {
+                Material[] materials = renderers[rendererIndex].materials;
+                for (int materialIndex = 0; materialIndex < materials.Length; materialIndex++)
+                {
+                    Material material = materials[materialIndex];
+                    if (material == null || IsRenderableMaterial(material))
+                    {
+                        continue;
+                    }
+
+                    Color color = ReadMaterialColor(material);
+                    Texture mainTexture = ReadMainTexture(material);
+                    material.shader = fallbackShader;
+                    WriteMaterialColor(material, color);
+                    WriteMainTexture(material, mainTexture);
+                    repairedCount++;
+                }
+            }
+
+            if (repairedCount > 0)
+            {
+                Debug.Log($"[PackageViewer] Repaired {repairedCount} model material(s) with shader: {fallbackShader.name}");
+            }
+        }
+
+        private static Shader FindRenderableShader()
+        {
+            return Shader.Find("Universal Render Pipeline/Lit")
+                ?? Shader.Find("Universal Render Pipeline/Simple Lit")
+                ?? Shader.Find("Standard")
+                ?? Shader.Find("Unlit/Texture")
+                ?? Shader.Find("Sprites/Default");
+        }
+
+        private static bool IsRenderableMaterial(Material material)
+        {
+            if (material.shader == null
+                || !material.shader.isSupported
+                || string.Equals(material.shader.name, "Hidden/InternalErrorShader", System.StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            if (UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline == null)
+            {
+                return true;
+            }
+
+            return material.shader.name.StartsWith("Universal Render Pipeline/", System.StringComparison.Ordinal)
+                || material.shader.name.StartsWith("Shader Graphs/", System.StringComparison.Ordinal);
+        }
+
+        private static Color ReadMaterialColor(Material material)
+        {
+            if (material.HasProperty("_BaseColor"))
+            {
+                return material.GetColor("_BaseColor");
+            }
+
+            if (material.HasProperty("_Color"))
+            {
+                return material.GetColor("_Color");
+            }
+
+            return Color.white;
+        }
+
+        private static void WriteMaterialColor(Material material, Color color)
+        {
+            if (material.HasProperty("_BaseColor"))
+            {
+                material.SetColor("_BaseColor", color);
+            }
+
+            if (material.HasProperty("_Color"))
+            {
+                material.SetColor("_Color", color);
+            }
+        }
+
+        private static Texture ReadMainTexture(Material material)
+        {
+            if (material.HasProperty("_BaseMap"))
+            {
+                return material.GetTexture("_BaseMap");
+            }
+
+            if (material.HasProperty("_MainTex"))
+            {
+                return material.GetTexture("_MainTex");
+            }
+
+            return null;
+        }
+
+        private static void WriteMainTexture(Material material, Texture texture)
+        {
+            if (texture == null)
+            {
+                return;
+            }
+
+            if (material.HasProperty("_BaseMap"))
+            {
+                material.SetTexture("_BaseMap", texture);
+            }
+
+            if (material.HasProperty("_MainTex"))
+            {
+                material.SetTexture("_MainTex", texture);
+            }
         }
 
         private static PackageBundle SelectBundleForCurrentPlatform(PackageManifest manifest)

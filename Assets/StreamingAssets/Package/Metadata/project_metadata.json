@@ -1,0 +1,37 @@
+{
+    "projectName": "MCV",
+    "fbxPath": "C:\\Users\\Ryo\\Documents\\Projects\\FBXViewer\\FBXViewer\\Assets\\Scripts\\Converter\\ImportedInput\\MCV.FBX",
+    "partCount": 2,
+    "parts": [
+        {
+            "partName": "主砲",
+            "descriptionCount": 1,
+            "descriptions": [
+                "主砲です、"
+            ],
+            "audioFiles": [
+                "C:/Users/Ryo/AppData/LocalLow/DefaultCompany/FBXViewer\\Packages\\MCV\\Audio\\主砲_0.wav"
+            ],
+            "selectedObjectNames": [
+                "gun_105mm"
+            ]
+        },
+        {
+            "partName": "タイヤ",
+            "descriptionCount": 2,
+            "descriptions": [
+                "タイヤ",
+                "ころがる"
+            ],
+            "audioFiles": [
+                "C:/Users/Ryo/AppData/LocalLow/DefaultCompany/FBXViewer\\Packages\\MCV\\Audio\\タイヤ_0.wav",
+                "C:/Users/Ryo/AppData/LocalLow/DefaultCompany/FBXViewer\\Packages\\MCV\\Audio\\タイヤ_1.wav"
+            ],
+            "selectedObjectNames": [
+                "WR_01",
+                "WR_02",
+                "WR_03"
+            ]
+        }
+    ]
+}
